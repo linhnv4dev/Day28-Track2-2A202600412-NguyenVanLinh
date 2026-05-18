@@ -49,10 +49,15 @@ check("Redis reachable", lambda:
 
 print("\n=== KAFKA ===")
 def check_kafka_topics():
+    ps = subprocess.run(
+        ["docker", "ps", "--format", "{{.Names}}"],
+        capture_output=True, text=True, check=True
+    )
+    kafka_container = next(name for name in ps.stdout.splitlines() if name.endswith("-kafka-1"))
     result = subprocess.run(
-        ["docker", "exec", "lab28-kafka-1", "kafka-topics", "--list",
-         "--bootstrap-server", "localhost:9092"],
-        capture_output=True, text=True
+        ["docker", "exec", kafka_container, "kafka-topics", "--list",
+         "--bootstrap-server", "kafka:29092"],
+        capture_output=True, text=True, check=True
     )
     assert "data.raw" in result.stdout
 

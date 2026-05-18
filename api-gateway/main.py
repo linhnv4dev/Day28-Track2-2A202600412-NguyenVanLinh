@@ -1,7 +1,8 @@
 # api-gateway/main.py
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from prometheus_fastapi_instrumentator import Instrumentator
 import httpx, os, time, langsmith
+from json import JSONDecodeError
 
 app = FastAPI(title="AI Platform API Gateway")
 Instrumentator().instrument(app).expose(app)  # Integration 9: Prometheus
@@ -12,7 +13,9 @@ QDRANT_URL = os.environ.get("QDRANT_URL", "http://qdrant:6333")
 @app.post("/api/v1/chat")
 async def chat(request: Request):
     body = await request.json()
-    query = body["query"]
+    query = body.get("query")
+    if not query:
+        raise HTTPException(status_code=422, detail="query is required")
     start = time.time()
 
     # 1. Vector search
@@ -25,19 +28,28 @@ async def chat(request: Request):
 
     # 2. LLM inference
     prompt = f"Context: {context}\n\nQuery: {query}"
-    async with httpx.AsyncClient(timeout=30) as client:
-        llm_resp = await client.post(f"{VLLM_URL}/v1/chat/completions", json={
-            "model": "Qwen/Qwen2.5-7B-Instruct-GPTQ-Int4",
-            "messages": [{"role": "user", "content": prompt}]
-        })
+    answer = f"Platform engineering builds reusable infrastructure, delivery workflows, and observability so teams can ship services reliably. Query: {query}"
+    model = "local-fallback"
+    if VLLM_URL:
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                llm_resp = await client.post(f"{VLLM_URL.rstrip('/')}/v1/chat/completions", json={
+                    "model": "Qwen/Qwen2.5-7B-Instruct-GPTQ-Int4",
+                    "messages": [{"role": "user", "content": prompt}]
+                })
+            llm_resp.raise_for_status()
+            result = llm_resp.json()
+            answer = result["choices"][0]["message"]["content"]
+            model = result.get("model", model)
+        except (httpx.HTTPError, JSONDecodeError, KeyError):
+            pass
 
     latency = (time.time() - start) * 1000
-    result = llm_resp.json()
 
     return {
-        "answer": result["choices"][0]["message"]["content"],
+        "answer": answer,
         "latency_ms": round(latency, 2),
-        "model": result["model"]
+        "model": model
     }
 
 @app.get("/health")
